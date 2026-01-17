@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "x7tnamechecker",
+  "version": "1.0.3",
+  "name": "x7t Name Checker",
+  "description": "Minecraft Account Checker",
+  "authors": ["x7t","Veridon"],
+  "contact": {},
+  "license": "MIT",
+  "icon": "assets/x7tnamechecker/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["com.x7t.namechecker.X7tNameChecker"],
+    "client": ["com.x7t.namechecker.X7tNameCheckerClient"]
+  },
+  "mixins": [],
+  "depends": {
+    "fabricloader": ">=0.16.9",
+    "minecraft": ">=1.21.4 <=1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
