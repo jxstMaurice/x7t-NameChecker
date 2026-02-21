@@ -38,15 +38,13 @@ public class X7tNameCheckerClient implements ClientModInitializer {
             Collection<PlayerListEntry> players = client.getNetworkHandler().getPlayerList();
             for (PlayerListEntry entry : players) {
                 String name = entry.getProfile().getName();
-                // Bedrock players often have . prefix (Floodgate) or start with *
                 if (name.startsWith(".") || name.startsWith("*")) {
-                    String cleanName = name.substring(1); // Remove prefix for suggestion
+                    String cleanName = name.substring(1);
                     if (cleanName.toLowerCase().startsWith(builder.getRemainingLowerCase()) ||
                         name.toLowerCase().startsWith(builder.getRemainingLowerCase())) {
                         builder.suggest(cleanName);
                     }
                 } else if (name.toLowerCase().startsWith(builder.getRemainingLowerCase())) {
-                    // Also suggest regular players in case they're Bedrock without prefix
                     builder.suggest(name);
                 }
             }
@@ -66,7 +64,6 @@ public class X7tNameCheckerClient implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
-        // Initialize cache and watchlist
         NameCache.init();
         WatchlistManager.init();
         
@@ -99,11 +96,16 @@ public class X7tNameCheckerClient implements ClientModInitializer {
                     .then(ClientCommandManager.argument("name", StringArgumentType.string())
                         .executes(context -> {
                             String name = StringArgumentType.getString(context, "name");
-                            if (WatchlistManager.addToWatchlist(name)) {
-                                context.getSource().sendFeedback(Text.literal("§8[§bx7t§8] §aAdded §e" + name + " §ato watchlist!"));
-                                context.getSource().sendFeedback(Text.literal("§8[§bx7t§8] §7You will be notified when this name becomes available."));
+                            if (WatchlistManager.isWatching(name)) {
+                                context.getSource().sendFeedback(Text.literal(NameCheckCommand.PREFIX + "§cThis name is already on your watchlist!"));
+                            } else if (WatchlistManager.isWatchlistFull()) {
+                                context.getSource().sendFeedback(Text.literal(NameCheckCommand.PREFIX + "§cWatchlist is full! §7(Max " + WatchlistManager.getMaxWatchlistSize() + " names)"));
+                                context.getSource().sendFeedback(Text.literal(NameCheckCommand.PREFIX + "§7Use §f/namecheck unwatch <name> §7to remove a name."));
+                            } else if (WatchlistManager.addToWatchlist(name)) {
+                                context.getSource().sendFeedback(Text.literal(NameCheckCommand.PREFIX + "§aAdded §e" + name + " §ato watchlist!"));
+                                context.getSource().sendFeedback(Text.literal(NameCheckCommand.PREFIX + "§7You will be notified when this name becomes available."));
                             } else {
-                                context.getSource().sendFeedback(Text.literal("§8[§bx7t§8] §cThis name is already on your watchlist!"));
+                                context.getSource().sendFeedback(Text.literal(NameCheckCommand.PREFIX + "§cFailed to add name to watchlist!"));
                             }
                             return 1;
                         })
@@ -115,9 +117,9 @@ public class X7tNameCheckerClient implements ClientModInitializer {
                         .executes(context -> {
                             String name = StringArgumentType.getString(context, "name");
                             if (WatchlistManager.removeFromWatchlist(name)) {
-                                context.getSource().sendFeedback(Text.literal("§8[§bx7t§8] §aRemoved §e" + name + " §afrom watchlist!"));
+                                context.getSource().sendFeedback(Text.literal(NameCheckCommand.PREFIX + "§aRemoved §e" + name + " §afrom watchlist!"));
                             } else {
-                                context.getSource().sendFeedback(Text.literal("§8[§bx7t§8] §cThis name is not on your watchlist!"));
+                                context.getSource().sendFeedback(Text.literal(NameCheckCommand.PREFIX + "§cThis name is not on your watchlist!"));
                             }
                             return 1;
                         })
@@ -131,28 +133,45 @@ public class X7tNameCheckerClient implements ClientModInitializer {
                     .then(ClientCommandManager.literal("clear")
                         .executes(context -> {
                             WatchlistManager.clearWatchlist();
-                            context.getSource().sendFeedback(Text.literal("§8[§bx7t§8] §aWatchlist cleared!"));
+                            context.getSource().sendFeedback(Text.literal(NameCheckCommand.PREFIX + "§aWatchlist cleared!"));
                             return 1;
                         })
                     )
                 )
                 .then(ClientCommandManager.literal("cache")
                     .executes(context -> {
-                        context.getSource().sendFeedback(Text.literal("§8[§bx7t§8] §7Cache contains §e" + NameCache.getCacheSize() + " §7players."));
+                        context.getSource().sendFeedback(Text.literal(NameCheckCommand.SEPARATOR));
+                        context.getSource().sendFeedback(Text.literal("§8[§bx7t Cache§8]"));
+                        context.getSource().sendFeedback(Text.literal(""));
+                        context.getSource().sendFeedback(Text.literal("§7Cached Players: §e" + NameCache.getCacheSize()));
+                        context.getSource().sendFeedback(Text.literal("§7Cache Hits: §a" + NameCache.getCacheHits()));
+                        context.getSource().sendFeedback(Text.literal("§7Cache Misses: §c" + NameCache.getCacheMisses()));
+                        context.getSource().sendFeedback(Text.literal("§7Hit Rate: §e" + String.format("%.1f", NameCache.getCacheHitRate()) + "%"));
+                        context.getSource().sendFeedback(Text.literal("§7Expiry: §e" + NameCache.getCacheExpiryMinutes() + " §7minutes"));
+                        context.getSource().sendFeedback(Text.literal("§7Offline Mode: " + (NameCache.isOfflineMode() ? "§aEnabled" : "§cDisabled")));
+                        context.getSource().sendFeedback(Text.literal(NameCheckCommand.SEPARATOR));
                         return 1;
                     })
                     .then(ClientCommandManager.literal("clear")
                         .executes(context -> {
                             NameCache.clearCache();
-                            context.getSource().sendFeedback(Text.literal("§8[§bx7t§8] §aCache cleared!"));
+                            context.getSource().sendFeedback(Text.literal(NameCheckCommand.PREFIX + "§aCache cleared!"));
+                            return 1;
+                        })
+                    )
+                    .then(ClientCommandManager.literal("offline")
+                        .executes(context -> {
+                            boolean newState = !NameCache.isOfflineMode();
+                            NameCache.setOfflineMode(newState);
+                            context.getSource().sendFeedback(Text.literal(NameCheckCommand.PREFIX + "§7Offline mode: " + (newState ? "§aEnabled" : "§cDisabled")));
                             return 1;
                         })
                     )
                 )
-                .then(ClientCommandManager.argument("name", StringArgumentType.string())
+                .then(ClientCommandManager.argument("player", StringArgumentType.word())
                     .suggests(PLAYER_SUGGESTIONS)
                     .executes(context -> {
-                        String name = StringArgumentType.getString(context, "name");
+                        String name = StringArgumentType.getString(context, "player");
                         NameCheckCommand.execute(context.getSource(), name);
                         return 1;
                     })
@@ -160,14 +179,16 @@ public class X7tNameCheckerClient implements ClientModInitializer {
             );
         });
         
-        // Register shutdown hook
-        Runtime.getRuntime().addShutdownHook(new Thread(WatchlistManager::shutdown));
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            WatchlistManager.shutdown();
+            NameCache.shutdown();
+        }));
     }
 
     private static void showWatchlist(FabricClientCommandSource source) {
         Set<String> watchlist = WatchlistManager.getWatchlist();
         
-        source.sendFeedback(Text.literal("§8§m                                        "));
+        source.sendFeedback(Text.literal(NameCheckCommand.SEPARATOR));
         source.sendFeedback(Text.literal("§8[§bx7t Watchlist§8]"));
         source.sendFeedback(Text.literal(""));
         
@@ -175,25 +196,25 @@ public class X7tNameCheckerClient implements ClientModInitializer {
             source.sendFeedback(Text.literal("§7Your watchlist is empty."));
             source.sendFeedback(Text.literal("§7Use §f/namecheck watch <name> §7to add names."));
         } else {
-            source.sendFeedback(Text.literal("§7Watching §e" + watchlist.size() + " §7names:"));
+            source.sendFeedback(Text.literal("§7Watching §e" + watchlist.size() + "/" + WatchlistManager.getMaxWatchlistSize() + " §7names:"));
             source.sendFeedback(Text.literal(""));
             for (String name : watchlist) {
                 Text nameText = Text.literal("  §8» §f" + name)
                     .setStyle(Style.EMPTY
-                        .withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, Text.literal("§7Click to remove from watchlist")))
-                        .withClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, "/namecheck unwatch " + name)));
+                        .withHoverEvent(TextEventCompat.showText(Text.literal("§7Click to remove from watchlist")))
+                        .withClickEvent(TextEventCompat.runCommand("/namecheck unwatch " + name)));
                 source.sendFeedback(nameText);
             }
             source.sendFeedback(Text.literal(""));
             source.sendFeedback(Text.literal("§7Checking every §e60 §7seconds..."));
         }
         
-        source.sendFeedback(Text.literal("§8§m                                        "));
+        source.sendFeedback(Text.literal(NameCheckCommand.SEPARATOR));
     }
 
     private static void showInfo(FabricClientCommandSource source) {
-        source.sendFeedback(Text.literal("§8§m                                        "));
-        source.sendFeedback(Text.literal("§8[§bx7t Name Checker§8]"));
+        source.sendFeedback(Text.literal(NameCheckCommand.SEPARATOR));
+        source.sendFeedback(Text.literal(NameCheckCommand.HEADER));
         source.sendFeedback(Text.literal(""));
         source.sendFeedback(Text.literal("§7Owner: §bJxstMaurice §7& §eVeridon"));
         source.sendFeedback(Text.literal("§7Bedrock Support!"));
@@ -207,9 +228,9 @@ public class X7tNameCheckerClient implements ClientModInitializer {
         source.sendFeedback(Text.literal("  §f/namecheck watchlist §8- §7Show watchlist"));
         source.sendFeedback(Text.literal("  §f/namecheck cache §8- §7Show cache info"));
         source.sendFeedback(Text.literal(""));
-        source.sendFeedback(Text.literal("§7Modrinth: §a[Click]").setStyle(Style.EMPTY.withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, "https://modrinth.com/mod/x7t-name-checker"))));
-        source.sendFeedback(Text.literal("§7Discord: §9[Click]").setStyle(Style.EMPTY.withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, "https://discord.gg/x7t"))));
-        source.sendFeedback(Text.literal("§7Github: §f[Click]").setStyle(Style.EMPTY.withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, "https://github.com/jxstmaurice"))));
-        source.sendFeedback(Text.literal("§8§m                                        "));
+        source.sendFeedback(Text.literal("§7Modrinth: §a[Click]").setStyle(Style.EMPTY.withClickEvent(TextEventCompat.openUrl("https://modrinth.com/mod/x7t-name-checker"))));
+        source.sendFeedback(Text.literal("§7Discord: §9[Click]").setStyle(Style.EMPTY.withClickEvent(TextEventCompat.openUrl("https://discord.gg/x7t"))));
+        source.sendFeedback(Text.literal("§7Github: §f[Click]").setStyle(Style.EMPTY.withClickEvent(TextEventCompat.openUrl("https://github.com/jxstmaurice"))));
+        source.sendFeedback(Text.literal(NameCheckCommand.SEPARATOR));
     }
 }

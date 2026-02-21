@@ -6,11 +6,14 @@ import com.google.gson.JsonObject;
 import com.google.gson.reflect.TypeToken;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.sound.SoundEvent;
 import net.minecraft.sound.SoundEvents;
 import net.minecraft.text.ClickEvent;
 import net.minecraft.text.HoverEvent;
 import net.minecraft.text.Style;
 import net.minecraft.text.Text;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.*;
 import java.lang.reflect.Type;
@@ -22,40 +25,88 @@ import java.util.*;
 import java.util.concurrent.*;
 
 public class WatchlistManager {
+    private static final Logger LOGGER = LoggerFactory.getLogger("x7t-namechecker");
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     private static final Path CONFIG_DIR = FabricLoader.getInstance().getConfigDir().resolve("x7tnamechecker");
     private static final Path WATCHLIST_FILE = CONFIG_DIR.resolve("watchlist.json");
+    private static final Path CONFIG_FILE = CONFIG_DIR.resolve("config.json");
     
     private static final Set<String> watchlist = ConcurrentHashMap.newKeySet();
     private static final Map<String, Boolean> lastStatus = new ConcurrentHashMap<>();
     private static ScheduledExecutorService scheduler;
-    private static final long CHECK_INTERVAL_MS = 60000; // Check every 60 seconds
+    private static final long CHECK_INTERVAL_MS = 60000;
+    
+    private static String notificationSoundId = "entity.player.levelup";
+    private static float notificationVolume = 1.0f;
     
     public static void init() {
         try {
             if (!Files.exists(CONFIG_DIR)) {
                 Files.createDirectories(CONFIG_DIR);
             }
+            loadConfig();
             loadWatchlist();
             startWatcher();
         } catch (IOException e) {
-            System.err.println("[x7t Name Checker] Failed to initialize watchlist: " + e.getMessage());
+            LOGGER.error("Failed to initialize watchlist: {}", e.getMessage());
         }
     }
     
     public static void shutdown() {
         if (scheduler != null && !scheduler.isShutdown()) {
             scheduler.shutdown();
+            try {
+                if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+                    scheduler.shutdownNow();
+                    if (!scheduler.awaitTermination(2, TimeUnit.SECONDS)) {
+                        LOGGER.warn("Watchlist scheduler did not terminate");
+                    }
+                }
+            } catch (InterruptedException e) {
+                scheduler.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
         }
     }
     
+    public static void setNotificationSound(String soundId) {
+        notificationSoundId = soundId;
+        saveConfig();
+    }
+    
+    public static void setNotificationVolume(float volume) {
+        notificationVolume = Math.max(0.0f, Math.min(1.0f, volume));
+        saveConfig();
+    }
+    
+    public static String getNotificationSoundId() {
+        return notificationSoundId;
+    }
+    
+    public static float getNotificationVolume() {
+        return notificationVolume;
+    }
+    
+    private static final int MAX_WATCHLIST_SIZE = 10;
+
     public static boolean addToWatchlist(String name) {
         if (watchlist.contains(name.toLowerCase())) {
+            return false;
+        }
+        if (watchlist.size() >= MAX_WATCHLIST_SIZE) {
             return false;
         }
         watchlist.add(name.toLowerCase());
         saveWatchlist();
         return true;
+    }
+
+    public static boolean isWatchlistFull() {
+        return watchlist.size() >= MAX_WATCHLIST_SIZE;
+    }
+
+    public static int getMaxWatchlistSize() {
+        return MAX_WATCHLIST_SIZE;
     }
     
     public static boolean removeFromWatchlist(String name) {
@@ -102,12 +153,11 @@ public class WatchlistManager {
             for (String name : watchlist) {
                 try {
                     checkName(name);
-                    Thread.sleep(1000); // Rate limiting between checks
+                    Thread.sleep(1000);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     break;
                 } catch (Exception e) {
-                    // Ignore individual check failures
                 }
             }
         }, 10, CHECK_INTERVAL_MS / 1000, TimeUnit.SECONDS);
@@ -127,7 +177,6 @@ public class WatchlistManager {
             
             Boolean previousStatus = lastStatus.get(name.toLowerCase());
             
-            // If name became available (was taken before, now available)
             if (available && previousStatus != null && !previousStatus) {
                 notifyAvailable(name);
             }
@@ -135,26 +184,81 @@ public class WatchlistManager {
             lastStatus.put(name.toLowerCase(), available);
             
         } catch (Exception e) {
-            // Silently ignore check failures
+            LOGGER.debug("Error checking watchlist name {}: {}", name, e.getMessage()); // Nr. 7
         }
     }
     
     private static void notifyAvailable(String name) {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client.player != null) {
-            // Send chat notification
-            client.player.sendMessage(Text.literal("§8§m                                        "), false);
-            client.player.sendMessage(Text.literal("§8[§bx7t§8] §a§lName Available!"), false);
+            client.player.sendMessage(Text.literal(NameCheckCommand.SEPARATOR), false);
+            client.player.sendMessage(Text.literal(NameCheckCommand.PREFIX + "§a§lName Available!"), false);
             client.player.sendMessage(Text.literal(""), false);
             client.player.sendMessage(Text.literal("§7The name §e" + name + " §7is now §aavailable§7!")
                 .setStyle(Style.EMPTY
-                    .withHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT, Text.literal("§7Click to copy")))
-                    .withClickEvent(new ClickEvent(ClickEvent.Action.COPY_TO_CLIPBOARD, name))), false);
+                    .withHoverEvent(TextEventCompat.showText(Text.literal("§7Click to copy")))
+                    .withClickEvent(TextEventCompat.copyToClipboard(name))), false);
             client.player.sendMessage(Text.literal("§7Claim it now at §bminecraft.net"), false);
-            client.player.sendMessage(Text.literal("§8§m                                        "), false);
+            client.player.sendMessage(Text.literal(NameCheckCommand.SEPARATOR), false);
             
-            // Play sound
-            client.player.playSound(SoundEvents.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f);
+            LOGGER.info("Name '{}' became available!", name); // Nr. 7
+            
+            if (notificationVolume > 0) {
+                SoundEvent sound = getSoundFromId(notificationSoundId);
+                if (sound != null) {
+                    client.player.playSound(sound, notificationVolume, 1.0f);
+                }
+            }
+        }
+    }
+    
+    private static SoundEvent getSoundFromId(String soundId) {
+        return switch (soundId.toLowerCase()) {
+            case "entity.player.levelup", "levelup" -> SoundEvents.ENTITY_PLAYER_LEVELUP;
+            case "entity.experience_orb.pickup", "xp" -> SoundEvents.ENTITY_EXPERIENCE_ORB_PICKUP;
+            case "block.note_block.pling", "pling" -> SoundEvents.BLOCK_NOTE_BLOCK_PLING.value();
+            case "block.note_block.bell", "bell" -> SoundEvents.BLOCK_NOTE_BLOCK_BELL.value();
+            case "block.note_block.chime", "chime" -> SoundEvents.BLOCK_NOTE_BLOCK_CHIME.value();
+            case "entity.arrow.hit_player", "hit" -> SoundEvents.ENTITY_ARROW_HIT_PLAYER;
+            case "ui.toast.challenge_complete", "toast" -> SoundEvents.UI_TOAST_CHALLENGE_COMPLETE;
+            case "none", "off", "disabled" -> null;
+            default -> SoundEvents.ENTITY_PLAYER_LEVELUP;
+        };
+    }
+    
+    private static void loadConfig() {
+        if (!Files.exists(CONFIG_FILE)) {
+            return;
+        }
+        
+        try (Reader reader = Files.newBufferedReader(CONFIG_FILE)) {
+            JsonObject config = GSON.fromJson(reader, JsonObject.class);
+            if (config != null) {
+                if (config.has("notificationSound")) {
+                    notificationSoundId = config.get("notificationSound").getAsString();
+                }
+                if (config.has("notificationVolume")) {
+                    notificationVolume = config.get("notificationVolume").getAsFloat();
+                }
+            }
+        } catch (Exception e) {
+            LOGGER.error("Failed to load config: {}", e.getMessage());
+        }
+    }
+    
+    private static void saveConfig() {
+        try {
+            if (!Files.exists(CONFIG_DIR)) {
+                Files.createDirectories(CONFIG_DIR);
+            }
+            JsonObject config = new JsonObject();
+            config.addProperty("notificationSound", notificationSoundId);
+            config.addProperty("notificationVolume", notificationVolume);
+            try (Writer writer = Files.newBufferedWriter(CONFIG_FILE)) {
+                GSON.toJson(config, writer);
+            }
+        } catch (IOException e) {
+            LOGGER.error("Failed to save config: {}", e.getMessage());
         }
     }
     
@@ -171,7 +275,7 @@ public class WatchlistManager {
                 watchlist.addAll(loaded);
             }
         } catch (Exception e) {
-            System.err.println("[x7t Name Checker] Failed to load watchlist: " + e.getMessage());
+            LOGGER.error("Failed to load watchlist: {}", e.getMessage());
         }
     }
     
@@ -184,7 +288,7 @@ public class WatchlistManager {
                 GSON.toJson(watchlist, writer);
             }
         } catch (IOException e) {
-            System.err.println("[x7t Name Checker] Failed to save watchlist: " + e.getMessage());
+            LOGGER.error("Failed to save watchlist: {}", e.getMessage());
         }
     }
 }
